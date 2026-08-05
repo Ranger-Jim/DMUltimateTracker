@@ -1,0 +1,37 @@
+{
+  // "compilerOptions" tells TypeScript HOW to check and compile your code.
+  "compilerOptions": {
+    // "target" = which version of JavaScript to compile down to.
+    // ES2020 is modern and safe for any recent Node version.
+    "target": "ES2020",
+
+    // "module" = which module system to use for import/export.
+    // CommonJS is what Node uses by default (this matches "require()" under the hood).
+    "module": "CommonJS",
+
+    // Lets TypeScript understand imports like "import fs from 'fs'"
+    // instead of forcing the older "import * as fs from 'fs'" syntax.
+    "esModuleInterop": true,
+
+    // Turns on ALL of TypeScript's strictness checks at once.
+    // This is what makes TypeScript actually useful — it catches
+    // missing fields, wrong types, etc. Worth keeping on from day one.
+    "strict": true,
+
+    // Makes sure filenames are treated consistently (matters cross-platform,
+    // e.g. Windows vs. the servers we'll deploy to later).
+    "forceConsistentCasingInFileNames": true,
+
+    // Skips type-checking inside node_modules (other people's code) —
+    // speeds things up and avoids errors in code we don't control.
+    "skipLibCheck": true,
+
+    // Where compiled JavaScript would go if we ever run a full build
+    // (not used yet by ts-node, but good to have set).
+    "outDir": "./dist",
+    "rootDir": "./src"
+  },
+
+  // Which folders TypeScript should actually pay attention to.
+  "include": ["src/**/*"]
+}
