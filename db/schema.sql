@@ -20,8 +20,17 @@ CREATE TABLE monsters (
     id                              INTEGER PRIMARY KEY AUTOINCREMENT,
 
     name                            TEXT NOT NULL,
-    source                          TEXT,               -- e.g. "XMM"
+    source                          TEXT,               -- e.g. "XMM", "MM"
     page                            INTEGER,
+
+    -- 5etools' 2014 vs 2024 monsters can share a name (373 of 450 monsters
+    -- in the 2014 MM alone overlap by name with the 2024 MM) but are NOT
+    -- interchangeable — stats genuinely differ (e.g. Aboleth: 135 HP in
+    -- 2014 vs 150 HP in 2024). So (name, source) is the real identity key,
+    -- not name alone. Derived at ingestion from a small source->edition
+    -- lookup table (e.g. MM/VGM/MTF -> "2014", XMM/XPHB -> "2024") so the
+    -- UI can filter or default to one edition when both exist.
+    edition                         TEXT,               -- e.g. "2014", "2024"
 
     size                            TEXT,                -- single letter, e.g. "M", "G"
 
@@ -36,11 +45,20 @@ CREATE TABLE monsters (
     alignment_display               TEXT,                -- e.g. "Chaotic Evil"
     alignment_raw                   TEXT,                -- JSON, full original alignment field
 
-    -- AC was checked across all 503 monsters in the 2024 MM data: always a
-    -- plain integer in this file (no "natural armor"/"from item" wrapper
-    -- objects like older 2014-format monsters sometimes have). Real column
-    -- since the tracker needs this instantly, every combat, every row.
-    ac                              INTEGER NOT NULL,
+    -- AC checked across all 1,131 monsters in all four bestiary files: 436
+    -- of them (39%) have MORE than one AC entry, or a conditional one —
+    -- e.g. Werebear's separate AC "in humanoid form" vs "in bear or hybrid
+    -- form", or Archmage's higher AC "with mage armor". A single integer
+    -- would silently drop that. So: `ac` stays a plain int (the FIRST/
+    -- primary listed value) for fast tracker sorting/display, while
+    -- `ac_raw` keeps the full original array so the stat block renderer
+    -- can reproduce the real "12 (15 with mage armor)" style text.
+    -- Nullable: a small number of monsters (summoned-creature templates,
+    -- e.g. Reanimated Companion) have NO fixed AC at all — just text like
+    -- "10 plus your Intelligence modifier" (a {special: "..."} entry in
+    -- ac_raw). ac is NULL in that case; ac_raw always has the full story.
+    ac                              INTEGER,
+    ac_raw                          TEXT NOT NULL,       -- JSON, full original ac array
 
     hp_average                      INTEGER,
     hp_formula                      TEXT,                -- e.g. "21d20 + 147"
@@ -78,7 +96,10 @@ CREATE TABLE monsters (
     -- CR is either a plain string ("21") or {cr, xp, xpLair} for monsters
     -- with a lair variant. cr stored as TEXT because fractional CRs like
     -- "1/4" aren't valid numbers; cr_numeric is a derived sortable copy.
-    cr                                TEXT NOT NULL,      -- e.g. "21", "1/4"
+    -- Nullable: summoned-creature templates (e.g. MPMM's Sacred Statue,
+    -- whose alignment/AC ALSO scale with the summoner — same pattern) have
+    -- no fixed CR at all. cr_numeric/xp/xp_lair are already nullable to match.
+    cr                                TEXT,               -- e.g. "21", "1/4"
     cr_numeric                       REAL,                -- e.g. 21, 0.25 (for sorting/filtering)
     xp                                INTEGER,
     xp_lair                          INTEGER,             -- NULL if no lair variant
@@ -110,6 +131,40 @@ CREATE TABLE monsters (
 
 CREATE INDEX idx_monsters_name ON monsters(name);
 CREATE INDEX idx_monsters_cr_numeric ON monsters(cr_numeric);
+-- The real uniqueness key: prevents accidentally ingesting the same exact
+-- (name, source) monster twice, while still allowing "Aboleth" from MM and
+-- "Aboleth" from XMM to coexist as two separate rows.
+CREATE UNIQUE INDEX idx_monsters_name_source ON monsters(name, source);
+
+-- ----------------------------------------------------------------------------
+-- REPRINT LINKS (2014 -> 2024 monster relationships)
+--
+-- 5etools' 2014-sourced monsters carry an explicit `reprintedAs` field
+-- pointing to their 2024 replacement(s) by name+source — e.g. the 2014
+-- Aboleth has reprintedAs: ["Aboleth|XMM"]. This is NOT always a rename-only
+-- link and NOT always 1:1:
+--   - Sometimes the name changes too (2014 "Acolyte" -> 2024 "Priest
+--     Acolyte|XMM") — matching by name alone would silently miss this.
+--   - Sometimes one legacy monster splits into two 2024 versions (2014
+--     "Gray Ooze" -> both "Gray Ooze|XMM" AND "Psychic Gray Ooze|XMM").
+--   - Sometimes there's no 2024 version at all (2014 "Bugbear Chief" has
+--     no reprintedAs field — simply not brought forward).
+-- A junction table handles all three cases; a single FK column on
+-- `monsters` couldn't represent the one-to-two split case.
+--
+-- Populated in a SECOND ingestion pass, after every source file has been
+-- loaded — resolving "Aboleth|XMM" into an actual new_monster_id requires
+-- the 2024 row to already exist.
+-- ----------------------------------------------------------------------------
+CREATE TABLE monster_reprint_links (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    legacy_monster_id INTEGER NOT NULL REFERENCES monsters(id) ON DELETE CASCADE,
+    new_monster_id    INTEGER NOT NULL REFERENCES monsters(id) ON DELETE CASCADE,
+    UNIQUE (legacy_monster_id, new_monster_id)
+);
+
+CREATE INDEX idx_reprint_links_legacy ON monster_reprint_links(legacy_monster_id);
+CREATE INDEX idx_reprint_links_new ON monster_reprint_links(new_monster_id);
 
 -- ----------------------------------------------------------------------------
 -- TRAITS / ACTIONS / BONUS ACTIONS / REACTIONS / LEGENDARY ACTIONS
