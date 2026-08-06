@@ -10,7 +10,7 @@ Custom full-stack DM tool for running D&D 5e combat, replacing gaps in the Found
 
 ## ✅ Done
 
-- [x] Zod monster schema built against real 2024 Monster Manual data (`bestiary-xmm.json`, 503 entries) and Ravneloft: The horrors within (`bestiary-rhw`, 70 entries)
+- [x] Zod monster schema built against real 2024 Monster Manual data (`bestiary-xmm.json`, 503 entries)
 - [x] 503/503 monsters passing schema validation
 - [x] Schema handles union types for nested list entries in trait/action text blocks
 - [x] Schema handles conditional wrapper objects in resist/immune/vulnerable/conditionImmune fields
@@ -18,38 +18,18 @@ Custom full-stack DM tool for running D&D 5e combat, replacing gaps in the Found
 - [x] TypeScript/Zod tooling sorted: pinned `typescript@5.6.3` (fixes ts-node 10.9.2 mismatch), using `.loose()` instead of deprecated `.passthrough()`
 - [x] `tsconfig.json` set up with `rootDir`, `outDir`, `strict`, `esModuleInterop`
 
----
+- [x] SQLite table design locked (`schema.sql`) — core `monsters` table with scalar columns for fast tracker access, separate child tables per block type (traits/actions/bonus actions/reactions/legendary actions), two-table spellcasting design covering both 2024 innate-caster and 2014 leveled/prepared-caster shapes
+- [x] 2014/2024 edition collision handled: `(name, source)` as the real uniqueness key (not `name` alone), `edition` column, and a `monster_reprint_links` junction table resolving 5etools' `reprintedAs` field — covers plain reprints, renames, one-to-two splits, and retired monsters with no successor
+- [x] Decided: monster search/picker always shows both editions when both exist (no default-hide-legacy toggle)
 
-## 🔨 In Progress / Up Next
+- [x] **Tag parser utility** — `tokenize()`, `renderPlainText()`, `extractSpellReferences()` built and tested against real data: 15/15 unit tests + full-corpus smoke test (0 errors, 0 unknown tags) across all 503 2024 monsters AND 70 rhw monsters (which surfaced 3 extra tags: `atk`, `dcYourSpellSave`, `hitYourSpellAttack` — now handled)
+- [x] **Initiative calculation** — confirmed `initiative.proficiency` is a multiplier (not a flat add) by reverse-engineering the Ancient Black Dragon's real +16 from the DDB screenshot; formula validated end-to-end in the schema test insert (came out to exactly 16)
 
-### 1. Tag parser utility (do this before ingestion)
-5etools text is full of inline markup tags — `{@spell}`, `{@dc}`, `{@hit}`, `{@damage}`, `{@condition}`, `{@atk}`, etc. This shows up in traits, actions, legendary actions, and spellcasting blocks, so it needs to be solved once as a shared utility rather than per-field.
-- [ ] Write parser/regex helpers to extract tag type + value (e.g. `{@spell Melf's Acid Arrow|XPHB}` → name + source)
-- [ ] Decide how parsed tags render in the UI (plain text? styled/linked spans?)
-- [ ] Handle trailing plain-text notes after tags (e.g. `(level 4 version)` on upcast spells) — don't lose these
+- [x] Monster Zod schema hardened against real 2014-era data (`bestiary-mm.json`, `bestiary-vgm.json`, `bestiary-vrgr.json`): fixed a `tags` array bug that had silently broken 132 of 503 2024 monsters, wired up the already-built `alignmentEntrySchema` that wasn't actually being used, added a recursive nested-`entries` block (`z.lazy()`) for named sub-sections like Night Hag's Heartstone, and extended list items to accept plain strings. Final tally: 503/503 (XMM), 450/450 (MM), 136/143 (VGM), 34/35 (VRGR) — all remaining failures are `_copy`-template monsters, tracked separately below.
 
-### 2. Initiative calculation
-- [ ] Build CR → proficiency bonus lookup table (CR 0–4 → +2, 5–8 → +3, 9–12 → +4, 13–16 → +5, 17–20 → +6, 21–24 → +7, 25–28 → +8, 29–30 → +9)
-- [ ] Implement `initiativeMod = dexMod + (proficiencyBonusForCR × initiative.proficiency)`
-- [ ] Precompute and store final `initiativeBonus` as a plain int column at ingestion time (don't recompute live in the tracker)
-- [ ] Keep raw `initiative.proficiency` value around too, for debugging/homebrew editing later
-- [ ] Confirm whether any of the 503 monsters use an `initiative.special` field (not just `proficiency`) and make sure schema accounts for it
-
-### 3. SQLite table design
-- [ ] Core `monsters` table: scalar fields as real columns (name, AC, HP, speed, CR, type, initiativeBonus, etc.) for fast filtering/sorting in the tracker
-- [ ] Separate tables per block type, each with `monster_id` FK + `order_index`:
-  - `monster_traits`
-  - `monster_actions`
-  - `monster_legendary_actions`
-  - `monster_reactions`
-  - `monster_spellcasting` (spell_name, frequency — will/1e/2e/3e/daily/etc — note)
-- [ ] Decide storage for free-form nested entries within a block (JSON column vs. further normalization)
-
-### 4. Monster ingestion script
-- [ ] `better-sqlite3` setup (sync API, no async ceremony)
-- [ ] Read validated monsters → insert into `monsters` + child tables
-- [ ] Run tag parser on trait/action/spell text during ingestion (or store raw and parse at render time — decide which)
-- [ ] Test against full 503-entry set
+- [x] **Monster ingestion script** — reads any number of bestiary files, validates every monster, skips `_copy` templates and schema failures with clear warnings (never silent drops), computes derived fields (edition, CR-based proficiency bonus, per-edition initiative math), inserts into all 10 tables, resolves `reprintedAs` links in a second pass. Extended to 6 real sourcebooks (XMM, MM, VGM, VRGR, MPMM, RHW) spanning both rules editions and every reprint generation. **Final: 1,454 monsters inserted, 604 reprint links resolved, 0 unresolved.**
+  - Found and fixed along the way: `Empyrean`'s "type is chosen from a list" shape (`{choose:[...]}`), and a `{special: "..."}` text variant that shows up on **AC, alignment, and CR** (not just HP, which the original schema comments already anticipated) for summoned-creature templates like Reanimated Companion and Sacred Statue — `ac` and `cr` are now nullable columns to match, with the full instructional text always preserved in `ac_raw`.
+  - **Initiative is edition-dependent**: 2024 monsters use DEX mod + (CR-based proficiency bonus × multiplier); 2014 monsters get ZERO proficiency bonus added — pure DEX mod only, since that field didn't exist yet. Confirmed against real data: the same "Ancient Black Dragon" name resolves to two rows — XMM correctly comes out to +16, MM (2014) correctly comes out to +2.
 
 ---
 
@@ -73,6 +53,7 @@ Custom full-stack DM tool for running D&D 5e combat, replacing gaps in the Found
 
 - [ ] **Homebrew monster creator** — build new monsters by copying/adapting existing traits/actions as a starting point (not a shared/deduplicated library, since most trait text is baked with monster-specific stats — copy-then-edit is the realistic workflow)
 - [ ] D&D Beyond PC import (deferred as its own complex problem)
+- [ ] **`_copy` template resolution** — 8 monsters across VGM/VRGR (e.g. the Booyahg variants, The Bagman) aren't full stat blocks in the JSON; they're instructions to derive one from a base monster (`_copy.name`/`_copy.source`) plus modifications (`_mod`: text find/replace, trait append, etc.). Currently skipped at ingestion with a console warning rather than resolved — revisit if these specific monsters turn out to matter.
 
 ---
 
@@ -81,3 +62,4 @@ Custom full-stack DM tool for running D&D 5e combat, replacing gaps in the Found
 - Not contributing to the unmaintained Combat Enhancements Foundry module — no license file, legally murky. Building original software instead.
 - Turso is for later (when the backend goes remote) — keep using local SQLite (`better-sqlite3`) for now. Migration later is low-friction since Turso is file-compatible with SQLite.
 - 2024 monster JSON `initiative.proficiency` is a **multiplier** on CR-based proficiency bonus, not a flat add. Most monsters: `1` (normal). Some: `0.5` (half). High-CR/legendary: `2` (expertise).
+- 2014→2024 reprints aren't always simple renames (`Acolyte` → `Priest Acolyte`) or 1:1 (`Gray Ooze` splits into `Gray Ooze` + `Psychic Gray Ooze`), and some have no 2024 version at all (`Bugbear Chief`). Always resolve via 5etools' `reprintedAs` field, never by matching names.

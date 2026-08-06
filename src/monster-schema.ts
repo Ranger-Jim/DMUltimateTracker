@@ -1,58 +1,45 @@
 // monster-schema.ts
-//
-// This file defines the "shape" that every monster must have.
-// Zod checks real JSON data against these rules at runtime.
-
 import { z } from "zod";
 
-// ---------------------------------------------------------------------------
-// SMALL REUSABLE PIECES
-// ---------------------------------------------------------------------------
+// Some fields (AC, alignment, resist/immune/etc.) occasionally use plain
+// instructional text instead of real game data — most commonly for
+// summoned-creature templates whose stats scale with whoever summoned them
+// (e.g. AC: "10 plus your Intelligence modifier") or monsters whose value
+// depends on something else entirely (e.g. alignment: "as the eidolon's
+// alignment"). Defined up here since AC and alignment both need it below,
+// not just resist/immune/vulnerable/conditionImmune further down the file.
+const SpecialNoteEntrySchema = z.object({
+  special: z.string(),
+});
 
-// z.string() means "this value must be text."
-// z.number() means "this value must be a number."
-// z.object({...}) means "this value must be an object with these exact keys."
-
-// Some monsters are actually "summoned creature templates" — things like
-// an Artificer's animated companion — where AC and HP aren't fixed numbers
-// at all. Instead they scale off whatever level/stats the PLAYER who
-// summoned them has, so 5etools stores plain instructional text instead
-// of a number (e.g. "10 plus your Intelligence modifier").
 const ArmorClassEntrySchema = z.union([
   z.number(),
   z.object({
     ac: z.number(),
-    from: z.array(z.string()), // z.array(x) means "a list of x"
-  }),
-  z.object({
-    special: z.string(),
-  }),
+    from: z.array(z.string()).optional(),
+    condition: z.string().optional(),
+    braces: z.boolean().optional(),
+  }).loose(),
+  SpecialNoteEntrySchema,
 ]);
 
-// Challenge Rating is either a plain string ("4") or, for monsters with lair
-// actions, an object with extra XP info.
+const alignmentEntrySchema = z.union([
+  z.string(),
+  z.object({
+    alignment: z.array(z.string()),
+    chance: z.number(),
+  }).loose(),
+  SpecialNoteEntrySchema,
+]);
+
 const ChallengeRatingSchema = z.union([
   z.string(),
   z.object({
     cr: z.string(),
-    xpLair: z.number().optional(), // .optional() = this key might not exist
+    xpLair: z.number().optional(),
   }),
 ]);
 
-// Most lines of trait/action text are just plain strings. But some
-// (like a Beholder's "Eye Rays," which needs a numbered sub-list of ten
-// different ray effects) embed a whole nested list object instead of text.
-//
-// This is a "d10 table" shape: { type: "list", items: [ {name, entries}, ... ] }
-// A list item's "type" is USUALLY "item," but for a sub-list nested under
-// a main trait (like a vampire's list of separate weaknesses), it's
-// "itemSub" instead. z.enum([...]) is like z.literal() but for checking
-// against several allowed exact values at once, instead of just one.
-//
-// Separately, a list item's text can show up under TWO different key
-// names depending on the source: "entries" (an array, for multiple lines
-// of text) or "entry" (a single string, for just one line). Both are
-// optional here because a given item will only ever have ONE of the two.
 const ListItemSchema = z.object({
   type: z.enum(["item", "itemSub"]),
   name: z.string().optional(),
@@ -60,23 +47,53 @@ const ListItemSchema = z.object({
   entry: z.string().optional(),
 });
 
+// A list item can be a fully-structured object (name + entries, for things
+// like a Beholder's named eye-ray effects) OR just a plain string (for a
+// simpler bullet list with no per-item name, like Martial Arts Adept's
+// unarmed-strike effect options).
+const ListItemEntrySchema = z.union([z.string(), ListItemSchema]);
+
 const NestedListSchema = z.object({
   type: z.literal("list"),
   style: z.string().optional(),
-  items: z.array(ListItemSchema),
+  items: z.array(ListItemEntrySchema),
 });
 
-// An entry line can be EITHER plain text OR one of these nested lists.
-const EntryLineSchema = z.union([z.string(), NestedListSchema]);
+// A named sub-section embedded inside a trait's entries — e.g. Night Hag's
+// "Heartstone" write-up nested inside the broader "Night Hag Items" trait:
+//   { type: "entries", name: "Heartstone", entries: ["This lustrous..."] }
+// Its own `entries` array can (in principle) contain more of these nested
+// blocks, so this type is RECURSIVE — it refers to itself. z.lazy() tells
+// Zod "don't build this schema's shape right now, wait until it's actually
+// used to parse something" — which is what makes self-reference possible.
+// Without it, Zod would need the full shape defined before it exists,
+// which is impossible for something that can contain more of itself.
+const NestedEntriesBlockSchema: z.ZodType<any> = z.lazy(() =>
+  z.object({
+    type: z.literal("entries"),
+    name: z.string().optional(),
+    entries: z.array(EntryLineSchema),
+  }).loose()
+);
 
-// A single trait, action, or reaction entry (they all share this shape).
+// An entry line can be plain text, a nested list (e.g. a Beholder's ten
+// numbered eye-ray effects), OR a named nested sub-section (Night Hag's
+// Heartstone/Soulbag write-ups). This is also wrapped in z.lazy() because
+// it's now part of the same recursive relationship as the schema above:
+// EntryLineSchema uses NestedEntriesBlockSchema, which uses EntryLineSchema.
+// `z.ZodType<any>` on both is a deliberate simplification — fully typing a
+// recursive structure like this is possible but adds real complexity for
+// not much practical benefit at this stage; `any` here just means "trust
+// the runtime check," which Zod still enforces correctly either way.
+const EntryLineSchema: z.ZodType<any> = z.lazy(() =>
+  z.union([z.string(), NestedListSchema, NestedEntriesBlockSchema])
+);
+
 const FeatureEntrySchema = z.object({
   name: z.string(),
   entries: z.array(EntryLineSchema),
 });
 
-// Speed can get complicated (walk, fly, swim, burrow — and fly sometimes has
-// a "(hover)" condition attached instead of being a plain number).
 const SpeedValueSchema = z.union([
   z.number(),
   z.object({
@@ -95,35 +112,7 @@ const SpeedSchema = z
     canHover: z.boolean(),
   })
   .partial();
-  // .partial() makes EVERY key in this object optional at once.
-  // Every monster has "walk", but not every monster can fly, swim, etc.,
-  // so instead of writing .optional() five times, .partial() does it for
-  // the whole object in one shot.
 
-// Damage resistances/immunities/vulnerabilities and condition immunities are
-// USUALLY a simple list of strings, e.g. resist: ["cold", "fire"].
-//
-// But sometimes an entry needs to explain an exception, like:
-//   Archmage's conditionImmune: charmed, but ONLY while a spell called
-//   Mind Blank is active.
-//   Half-Dragon's resist: not a fixed damage type — it depends on which
-//   trait option the DM picked ("special" case).
-//
-// Both exception shapes get wrapped in an object instead of being a plain
-// string, so we need a union covering all three possibilities.
-
-const SpecialNoteEntrySchema = z.object({
-  special: z.string(),
-});
-
-// .loose() means "allow any OTHER keys on this object besides the
-// ones I've named, and don't complain about them." We need this here
-// because the wrapping key repeats the field's own name (e.g. a
-// conditionImmune entry has a key literally called "conditionImmune"
-// inside it) — rather than writing a separate schema for every field name,
-// .loose() lets us accept that extra key generically.
-// (Note: older Zod versions called this .passthrough() — same idea, .loose()
-// is just the current name for it.)
 const ConditionalNoteEntrySchema = z
   .object({
     note: z.string(),
@@ -137,9 +126,6 @@ const DamageOrConditionEntrySchema = z.union([
   ConditionalNoteEntrySchema,
 ]);
 
-// Hit points hit the exact same "summoned creature scales with you" issue
-// as AC above — sometimes it's a real number/formula, sometimes it's
-// instructional text describing how to calculate it yourself.
 const HitPointsSchema = z.union([
   z.object({
     average: z.number(),
@@ -150,9 +136,28 @@ const HitPointsSchema = z.union([
   }),
 ]);
 
-// Most monsters have a simple type. e.g. "elemental"
-// But some have a sub type (dragons - (chromatic, metallic), demons, devils, etc.)
-// Those with a subtype have it as an object ("type": "dragon", "tags": ["chromatic"])
+const typeTagSchema = z.union([
+  z.string(),
+  z.object({
+    tag: z.string(),
+    prefix: z.string().optional(),
+    prefixHidden: z.boolean().optional(),
+  }).loose(),
+]);
+
+// Most skills are just a plain bonus string, e.g. {"perception": "+7"}.
+// But some monsters have a special "other" entry: a set of skills where
+// only ONE actually applies (DM's choice or situational), e.g. Adult
+// Oblex's "other": [{"oneOf": {"arcana":"+7","history":"+7",...}}].
+const SkillValueSchema = z.union([
+  z.string(),
+  z.array(
+    z.object({
+      oneOf: z.record(z.string(), z.string()),
+    }).loose()
+  ),
+]);
+
 const CreatureTypeSchema = z.union([
   z.string(),
   z.object({
@@ -162,52 +167,39 @@ const CreatureTypeSchema = z.union([
         choose: z.array(z.string()),
       }),
     ]),
-    tags: z.array(z.string()).optional(),
+    tags: z.array(typeTagSchema).optional(),
+    // ^ FIX: tags is a LIST of tags (["chromatic"] or [{tag:"elf",...}]),
+    // not a single tag. Without z.array() here, every monster whose type
+    // is an object — not just Drow, but every tagged dragon too — fails,
+    // since Zod expects exactly one tag value where the JSON actually has
+    // an array. Also .optional(): a type object doesn't always have tags
+    // at all (e.g. some "choose" shapes might omit it).
   }),
 ]);
 
-// ---------------------------------------------------------------------------
-// THE MAIN MONSTER SCHEMA
-// ---------------------------------------------------------------------------
-
 export const MonsterSchema = z.object({
-  // --- Fields every single monster has ---
   name: z.string(),
   source: z.string(),
-  size: z.array(z.string()), // e.g. ["M"] or ["S", "M"] for variable-size creatures
+  size: z.array(z.string()),
   type: CreatureTypeSchema,
-  alignment: z.array(z.string()).optional(), // some (like constructs) have none
+  alignment: z.array(alignmentEntrySchema).optional(),
+  // ^ FIX: was z.array(z.string()), which ignored the alignmentEntrySchema
+  // union you already built above. That union handles variable-alignment
+  // monsters like Cloud Giant ({"alignment":["N","G"],"chance":50}) — but
+  // only if MonsterSchema actually points at it.
   ac: z.array(ArmorClassEntrySchema),
   hp: HitPointsSchema,
   speed: SpeedSchema,
-
-  // --- Ability scores: every monster has all six ---
   str: z.number(),
   dex: z.number(),
   con: z.number(),
   int: z.number(),
   wis: z.number(),
   cha: z.number(),
-
-  // Summoned-creature templates (like an Artificer's animated companion)
-  // don't have a fixed CR at all — their power scales with whoever
-  // summoned them, so this field is sometimes just absent entirely.
   cr: ChallengeRatingSchema.optional(),
-
-  // When cr is missing for that reason, monsters often have this instead:
-  // a plain-text note about how to calculate proficiency bonus.
   pbNote: z.string().optional(),
-
-  // --- Fields that exist on SOME monsters but not others ---
-  // Everything below is .optional() because the key may not appear at all
-  // in a given monster's JSON.
   save: z.record(z.string(), z.string()).optional(),
-  // z.record(keyType, valueType) = "an object with any number of keys,
-  // where I don't know the key names in advance." Saving throws are a good
-  // example: some monsters have {dex: "+5", wis: "+5"}, others have none,
-  // and the keys present vary monster to monster.
-
-  skill: z.record(z.string(), z.string()).optional(),
+  skill: z.record(z.string(), SkillValueSchema).optional(),
   senses: z.array(z.string()).optional(),
   passive: z.number().optional(),
   languages: z.array(z.string()).optional(),
@@ -215,23 +207,14 @@ export const MonsterSchema = z.object({
   immune: z.array(DamageOrConditionEntrySchema).optional(),
   vulnerable: z.array(DamageOrConditionEntrySchema).optional(),
   conditionImmune: z.array(DamageOrConditionEntrySchema).optional(),
-
   trait: z.array(FeatureEntrySchema).optional(),
   action: z.array(FeatureEntrySchema).optional(),
   bonus: z.array(FeatureEntrySchema).optional(),
   reaction: z.array(FeatureEntrySchema).optional(),
   legendary: z.array(FeatureEntrySchema).optional(),
   legendaryActionsLair: z.number().optional(),
-
   environment: z.array(z.string()).optional(),
   hasToken: z.boolean().optional(),
 });
 
-// ---------------------------------------------------------------------------
-// THE INFERRED TYPESCRIPT TYPE
-// ---------------------------------------------------------------------------
-
-// This one line gives you a full TypeScript type called "Monster" that
-// matches the schema above EXACTLY — you never have to write it by hand,
-// and if you edit the schema later, this type updates automatically.
 export type Monster = z.infer<typeof MonsterSchema>;
