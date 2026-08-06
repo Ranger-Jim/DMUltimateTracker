@@ -13,14 +13,19 @@ import { z } from "zod";
 // z.number() means "this value must be a number."
 // z.object({...}) means "this value must be an object with these exact keys."
 
-// Some monsters have a simple AC (just a number, e.g. 16).
-// Some have a complex AC (an object explaining WHY the AC is that high, e.g. from armor).
-// z.union([...]) means "this value can be EITHER of these shapes."
+// Some monsters are actually "summoned creature templates" — things like
+// an Artificer's animated companion — where AC and HP aren't fixed numbers
+// at all. Instead they scale off whatever level/stats the PLAYER who
+// summoned them has, so 5etools stores plain instructional text instead
+// of a number (e.g. "10 plus your Intelligence modifier").
 const ArmorClassEntrySchema = z.union([
   z.number(),
   z.object({
     ac: z.number(),
     from: z.array(z.string()), // z.array(x) means "a list of x"
+  }),
+  z.object({
+    special: z.string(),
   }),
 ]);
 
@@ -39,14 +44,17 @@ const ChallengeRatingSchema = z.union([
 // different ray effects) embed a whole nested list object instead of text.
 //
 // This is a "d10 table" shape: { type: "list", items: [ {name, entries}, ... ] }
-// A list item's text can show up under TWO different key names depending
-// on the source: "entries" (an array, for multiple lines of text) or
-// "entry" (a single string, for just one line). Both are optional here
-// because a given item will only ever have ONE of the two — but Zod
-// doesn't enforce "exactly one of these two fields" by default, so this
-// is a deliberately loose check that just accepts either without fussing.
+// A list item's "type" is USUALLY "item," but for a sub-list nested under
+// a main trait (like a vampire's list of separate weaknesses), it's
+// "itemSub" instead. z.enum([...]) is like z.literal() but for checking
+// against several allowed exact values at once, instead of just one.
+//
+// Separately, a list item's text can show up under TWO different key
+// names depending on the source: "entries" (an array, for multiple lines
+// of text) or "entry" (a single string, for just one line). Both are
+// optional here because a given item will only ever have ONE of the two.
 const ListItemSchema = z.object({
-  type: z.literal("item"),
+  type: z.enum(["item", "itemSub"]),
   name: z.string().optional(),
   entries: z.array(z.string()).optional(),
   entry: z.string().optional(),
@@ -129,6 +137,19 @@ const DamageOrConditionEntrySchema = z.union([
   ConditionalNoteEntrySchema,
 ]);
 
+// Hit points hit the exact same "summoned creature scales with you" issue
+// as AC above — sometimes it's a real number/formula, sometimes it's
+// instructional text describing how to calculate it yourself.
+const HitPointsSchema = z.union([
+  z.object({
+    average: z.number(),
+    formula: z.string(),
+  }),
+  z.object({
+    special: z.string(),
+  }),
+]);
+
 // ---------------------------------------------------------------------------
 // THE MAIN MONSTER SCHEMA
 // ---------------------------------------------------------------------------
@@ -140,10 +161,7 @@ export const MonsterSchema = z.object({
   size: z.array(z.string()), // e.g. ["M"] or ["S", "M"] for variable-size creatures
   alignment: z.array(z.string()).optional(), // some (like constructs) have none
   ac: z.array(ArmorClassEntrySchema),
-  hp: z.object({
-    average: z.number(),
-    formula: z.string(),
-  }),
+  hp: HitPointsSchema,
   speed: SpeedSchema,
 
   // --- Ability scores: every monster has all six ---
@@ -154,7 +172,14 @@ export const MonsterSchema = z.object({
   wis: z.number(),
   cha: z.number(),
 
-  cr: ChallengeRatingSchema,
+  // Summoned-creature templates (like an Artificer's animated companion)
+  // don't have a fixed CR at all — their power scales with whoever
+  // summoned them, so this field is sometimes just absent entirely.
+  cr: ChallengeRatingSchema.optional(),
+
+  // When cr is missing for that reason, monsters often have this instead:
+  // a plain-text note about how to calculate proficiency bonus.
+  pbNote: z.string().optional(),
 
   // --- Fields that exist on SOME monsters but not others ---
   // Everything below is .optional() because the key may not appear at all

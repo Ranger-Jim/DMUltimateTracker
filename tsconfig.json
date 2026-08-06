@@ -29,7 +29,16 @@
     // Where compiled JavaScript would go if we ever run a full build
     // (not used yet by ts-node, but good to have set).
     "outDir": "./dist",
-    "rootDir": "./src"
+
+    "rootDir": "./src",
+
+    // "types" tells TypeScript exactly which @types packages to treat as
+    // GLOBAL (available everywhere without importing them). Without this,
+    // TypeScript auto-includes every @types package it finds in
+    // node_modules — which can cause weird collisions if some other
+    // package happens to also declare a global named something like
+    // "process". Being explicit here avoids that.
+    "types": ["node"]
   },
 
   // Which folders TypeScript should actually pay attention to.

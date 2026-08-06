@@ -19,9 +19,19 @@ import { MonsterSchema } from "./monster-schema";
 // STEP 1: Read the file off disk
 // -------------------------------------
 
+// "process.argv" in Node's list of command-line arguments. Index 0 is always
+// the path to node itself, index 1 is always the path to this script,
+// so index 2 onward is whatever YOU types after the script name.
+
+const filenameArg = process.argv[2];
+
+const filename = filenameArg ?? "bestiary-xmm.json";
+
+console.log(`Reading file: ./data/${filename}\n`);
+
 // fs.readFileSync reads a file and hands back its raw text content.
 // "utf-8" tells it to treat the bytes as normal text, not binary data.
-const rawText = fs.readFileSync("./data/bestiary-xmm.json", "utf-8");
+const rawText = fs.readFileSync(`./data/${filename}`, "utf-8");
 
 // JSON.parse turns that raw text into a real JavaScript object we can use.
 // At this point, TypeScript has no idea what shape this object is --
@@ -73,7 +83,7 @@ for (const rawMonster of monsterList) {
 }
 
 // ------------------------------------------------------
-// STEP $: Report results
+// STEP 4: Report results
 // ------------------------------------------------------
 
 console.log(`\n Passed: ${successCount}`);
