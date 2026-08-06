@@ -150,6 +150,22 @@ const HitPointsSchema = z.union([
   }),
 ]);
 
+// Most monsters have a simple type. e.g. "elemental"
+// But some have a sub type (dragons - (chromatic, metallic), demons, devils, etc.)
+// Those with a subtype have it as an object ("type": "dragon", "tags": ["chromatic"])
+const CreatureTypeSchema = z.union([
+  z.string(),
+  z.object({
+    type: z.union([
+      z.string(),
+      z.object({
+        choose: z.array(z.string()),
+      }),
+    ]),
+    tags: z.array(z.string()).optional(),
+  }),
+]);
+
 // ---------------------------------------------------------------------------
 // THE MAIN MONSTER SCHEMA
 // ---------------------------------------------------------------------------
@@ -159,6 +175,7 @@ export const MonsterSchema = z.object({
   name: z.string(),
   source: z.string(),
   size: z.array(z.string()), // e.g. ["M"] or ["S", "M"] for variable-size creatures
+  type: CreatureTypeSchema,
   alignment: z.array(z.string()).optional(), // some (like constructs) have none
   ac: z.array(ArmorClassEntrySchema),
   hp: HitPointsSchema,
